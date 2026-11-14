@@ -35,16 +35,31 @@ impl CompileError {
 }
 
 pub fn compile_file(entry_path: &Path, project_root: &Path) -> Result<BlockIr, CompileError> {
+    compile_file_with_packages(entry_path, project_root, &BTreeMap::new())
+}
+
+pub fn compile_file_with_packages(
+    entry_path: &Path,
+    project_root: &Path,
+    packages: &BTreeMap<String, PathBuf>,
+) -> Result<BlockIr, CompileError> {
     let canon_root = project_root.canonicalize()?;
     let canon_entry = entry_path.canonicalize()?;
     let mut visiting = HashSet::new();
     let mut modules = BTreeMap::new();
-    compile_file_recursive(&canon_entry, &canon_root, &mut visiting, &mut modules)
+    compile_file_recursive(
+        &canon_entry,
+        &canon_root,
+        packages,
+        &mut visiting,
+        &mut modules,
+    )
 }
 
 fn compile_file_recursive(
     file_path: &Path,
     canon_root: &Path,
+    packages: &BTreeMap<String, PathBuf>,
     visiting: &mut HashSet<PathBuf>,
     modules: &mut BTreeMap<String, BlockIr>,
 ) -> Result<BlockIr, CompileError> {
@@ -75,27 +90,79 @@ fn compile_file_recursive(
     let parent_dir = file_path.parent().unwrap_or(canon_root);
 
     for imp in &ast.imports {
-        let rel = Path::new(&imp.path);
-        if rel.is_absolute() {
-            return Err(CompileError::Type(vec![Diagnostic {
-                code: "B112".to_string(),
-                message: format!("absolute import path '{}' is not allowed", imp.path),
-                line: imp.span.line,
-                col: imp.span.col,
-                span: Some(imp.span.clone()),
-            }]));
-        }
-        let target_path = parent_dir.join(rel).canonicalize().map_err(|_| {
-            CompileError::Type(vec![Diagnostic {
-                code: "B110".to_string(),
-                message: format!("missing import file '{}'", imp.path),
-                line: imp.span.line,
-                col: imp.span.col,
-                span: Some(imp.span.clone()),
-            }])
-        })?;
+        let (target_path, next_root) = if imp.path.starts_with('@') {
+            let pkg_root = packages.get(&imp.path).ok_or_else(|| {
+                CompileError::Type(vec![Diagnostic {
+                    code: "B110".to_string(),
+                    message: format!(
+                        "package '{}' not found in Block.lock / local cache; run `sub install`",
+                        imp.path
+                    ),
+                    line: imp.span.line,
+                    col: imp.span.col,
+                    span: Some(imp.span.clone()),
+                }])
+            })?;
+            let canon_pkg_root = pkg_root.canonicalize().map_err(|_| {
+                CompileError::Type(vec![Diagnostic {
+                    code: "B110".to_string(),
+                    message: format!("cached package directory missing for '{}'", imp.path),
+                    line: imp.span.line,
+                    col: imp.span.col,
+                    span: Some(imp.span.clone()),
+                }])
+            })?;
+            let pkg_manifest =
+                block_package::PackageManifest::from_file(&canon_pkg_root.join("Block.toml"))
+                    .map_err(|e| {
+                        CompileError::Type(vec![Diagnostic {
+                            code: "B110".to_string(),
+                            message: format!("invalid Block.toml in package '{}': {e}", imp.path),
+                            line: imp.span.line,
+                            col: imp.span.col,
+                            span: Some(imp.span.clone()),
+                        }])
+                    })?;
+            let entry = canon_pkg_root
+                .join(&pkg_manifest.package.entry)
+                .canonicalize()
+                .map_err(|_| {
+                    CompileError::Type(vec![Diagnostic {
+                        code: "B110".to_string(),
+                        message: format!(
+                            "missing entrypoint '{}' in package '{}'",
+                            pkg_manifest.package.entry, imp.path
+                        ),
+                        line: imp.span.line,
+                        col: imp.span.col,
+                        span: Some(imp.span.clone()),
+                    }])
+                })?;
+            (entry, canon_pkg_root)
+        } else {
+            let rel = Path::new(&imp.path);
+            if rel.is_absolute() {
+                return Err(CompileError::Type(vec![Diagnostic {
+                    code: "B112".to_string(),
+                    message: format!("absolute import path '{}' is not allowed", imp.path),
+                    line: imp.span.line,
+                    col: imp.span.col,
+                    span: Some(imp.span.clone()),
+                }]));
+            }
+            let entry = parent_dir.join(rel).canonicalize().map_err(|_| {
+                CompileError::Type(vec![Diagnostic {
+                    code: "B110".to_string(),
+                    message: format!("missing import file '{}'", imp.path),
+                    line: imp.span.line,
+                    col: imp.span.col,
+                    span: Some(imp.span.clone()),
+                }])
+            })?;
+            (entry, canon_root.to_path_buf())
+        };
 
-        let mod_ir = compile_file_recursive(&target_path, canon_root, visiting, modules)?;
+        let mod_ir = compile_file_recursive(&target_path, &next_root, packages, visiting, modules)?;
         if mod_ir.block_name != imp.name {
             return Err(CompileError::Type(vec![Diagnostic {
                 code: "B110".to_string(),

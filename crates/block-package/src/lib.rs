@@ -116,7 +116,15 @@ pub struct PackageMetadata {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
     pub license: Option<String>,
+    #[serde(default)]
+    pub repository: Option<String>,
+    #[serde(default)]
+    pub homepage: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
     pub entry: String,
 }
 
@@ -176,6 +184,42 @@ pub struct ArchiveBuildResult {
     pub sha256: String,
     pub size_bytes: usize,
     pub file_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchiveVerifyResult {
+    pub name: String,
+    pub scope: Option<String>,
+    pub version: String,
+    pub entry: String,
+    pub sha256: String,
+    pub size_bytes: usize,
+}
+
+pub fn verify_archive(path: &Path) -> Result<ArchiveVerifyResult, PackageError> {
+    let bytes = fs::read(path)?;
+    let tmp = tempfile::Builder::new().prefix("sub-verify-").tempdir()?;
+    let sha256 = extract_archive(&bytes, tmp.path(), None)?;
+    let manifest_path = tmp.path().join("Block.toml");
+    if !manifest_path.exists() {
+        return Err(PackageError::Manifest("archive missing Block.toml".into()));
+    }
+    let manifest = PackageManifest::from_file(&manifest_path)?;
+    let entry_path = tmp.path().join(&manifest.package.entry);
+    if !entry_path.exists() {
+        return Err(PackageError::Manifest(format!(
+            "archive missing declared entrypoint '{}'",
+            manifest.package.entry
+        )));
+    }
+    Ok(ArchiveVerifyResult {
+        name: manifest.package.name,
+        scope: manifest.package.scope,
+        version: manifest.package.version,
+        entry: manifest.package.entry,
+        sha256,
+        size_bytes: bytes.len(),
+    })
 }
 
 fn is_excluded(rel: &Path) -> bool {

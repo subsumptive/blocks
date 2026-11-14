@@ -1,9 +1,11 @@
 mod registry_cmds;
 
 use anyhow::{bail, Context, Result};
-use block_compiler::compile_file;
+use block_compiler::compile_file_with_packages;
 use block_ir::BlockIr;
+use block_package::PackageId;
 use block_parser::TypeName;
+use block_resolver::Lockfile;
 use block_runtime::{execute, ComponentRegistry, ExecutionContext};
 use block_types::Value;
 use clap::{Parser, Subcommand};
@@ -81,9 +83,27 @@ enum Commands {
     Install {
         #[arg(long)]
         locked: bool,
+        #[arg(long)]
+        frozen: bool,
+        #[arg(long)]
+        offline: bool,
+    },
+    /// Update dependencies within manifest constraints
+    Update { package: Option<String> },
+    /// List resolved project dependencies
+    List {
+        #[arg(long)]
+        tree: bool,
     },
     /// Validate and build a .blockpkg archive
     Package,
+    /// Verify a .blockpkg archive's structure and integrity
+    Verify { archive: PathBuf },
+    /// Manage the local package cache
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
     /// Publish the current package to Subsumptive Registry
     Publish,
     /// Yank a published package version
@@ -95,6 +115,19 @@ struct BlockManifest {
     package: PackageSection,
     #[serde(default)]
     runtime: RuntimeSection,
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// List cached packages
+    List,
+    /// Clean cached packages
+    Clean {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -149,8 +182,19 @@ fn run_cli() -> Result<()> {
         Commands::Info { package } => registry_cmds::cmd_info(&package),
         Commands::Add { package } => registry_cmds::cmd_add(&package),
         Commands::Remove { package } => registry_cmds::cmd_remove(&package),
-        Commands::Install { locked } => registry_cmds::cmd_install(locked),
+        Commands::Install {
+            locked,
+            frozen,
+            offline,
+        } => registry_cmds::cmd_install(locked, frozen, offline),
+        Commands::Update { package } => registry_cmds::cmd_update(package),
+        Commands::List { tree } => registry_cmds::cmd_list(tree),
         Commands::Package => registry_cmds::cmd_package().map(|_| ()),
+        Commands::Verify { archive } => registry_cmds::cmd_verify(&archive),
+        Commands::Cache { action } => match action {
+            CacheAction::List => registry_cmds::cmd_cache_list(),
+            CacheAction::Clean { dry_run, yes } => registry_cmds::cmd_cache_clean(dry_run, yes),
+        },
         Commands::Publish => registry_cmds::cmd_publish(),
         Commands::Yank { package_version } => registry_cmds::cmd_yank(&package_version),
     }
@@ -204,7 +248,19 @@ fn compile_project() -> Result<(BlockManifest, BlockIr)> {
     let manifest = load_manifest()?;
     let entry = &manifest.package.entry;
     let cwd = std::env::current_dir()?;
-    match compile_file(Path::new(entry), &cwd) {
+    let mut pkg_map = BTreeMap::new();
+    let lock_path = cwd.join("Block.lock");
+    if lock_path.exists() {
+        let lf = Lockfile::read(&lock_path)?;
+        let cache_root = cwd.join(".subsumptive").join("packages");
+        for pkg in lf.package {
+            if let Ok(id) = PackageId::parse(&pkg.name) {
+                let dest = cache_root.join(&id.scope).join(&id.name).join(&pkg.version);
+                pkg_map.insert(pkg.name, dest);
+            }
+        }
+    }
+    match compile_file_with_packages(Path::new(entry), &cwd, &pkg_map) {
         Ok(ir) => Ok((manifest, ir)),
         Err(err) => {
             let source = fs::read_to_string(entry).unwrap_or_default();

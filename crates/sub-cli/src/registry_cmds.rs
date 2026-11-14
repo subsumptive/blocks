@@ -149,7 +149,7 @@ pub fn cmd_add(pkg_spec: &str) -> Result<()> {
     let updated = toml::to_string_pretty(&manifest)?;
     fs::write(&manifest_path, updated)?;
     println!("Added {id} ({req_str}) to Block.toml");
-    cmd_install(false)
+    cmd_install(false, false, false)
 }
 
 pub fn cmd_remove(pkg_str: &str) -> Result<()> {
@@ -163,21 +163,20 @@ pub fn cmd_remove(pkg_str: &str) -> Result<()> {
     let updated = toml::to_string_pretty(&manifest)?;
     fs::write(&manifest_path, updated)?;
     println!("Removed {id} from Block.toml");
-    cmd_install(false)
+    cmd_install(false, false, false)
 }
 
-pub fn cmd_install(locked: bool) -> Result<()> {
+pub fn cmd_install(locked: bool, frozen: bool, offline: bool) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let manifest = PackageManifest::from_file(&cwd.join("Block.toml"))?;
     let lock_path = cwd.join("Block.lock");
     let client = RegistryClient::from_env_or_creds();
 
-    let lockfile = if locked {
+    let lockfile = if locked || frozen {
         if !lock_path.exists() {
-            bail!("--locked passed but Block.lock does not exist");
+            bail!("--locked/--frozen passed but Block.lock does not exist");
         }
         let lf = Lockfile::read(&lock_path)?;
-        // Verify all manifest dependencies are present in lockfile
         let locked_names: BTreeMap<String, String> = lf
             .package
             .iter()
@@ -189,6 +188,11 @@ pub fn cmd_install(locked: bool) -> Result<()> {
             }
         }
         lf
+    } else if offline {
+        if !lock_path.exists() {
+            bail!("--offline passed but Block.lock does not exist");
+        }
+        Lockfile::read(&lock_path)?
     } else {
         let lf = resolve(&manifest.dependencies, client.base_url(), &client)?;
         lf.write_atomic(&lock_path)?;
@@ -202,6 +206,13 @@ pub fn cmd_install(locked: bool) -> Result<()> {
         if dest.exists() {
             continue;
         }
+        if frozen || offline {
+            bail!(
+                "package {} v{} is not in local cache and network access is disabled (--frozen/--offline)",
+                id,
+                pkg.version
+            );
+        }
         let bytes = client.download_archive(&id, &pkg.version)?;
         extract_archive(&bytes, &dest, Some(&pkg.checksum))?;
         println!("Installed {} v{}", id, pkg.version);
@@ -210,5 +221,87 @@ pub fn cmd_install(locked: bool) -> Result<()> {
         "Dependencies up to date ({} package(s))",
         lockfile.package.len()
     );
+    Ok(())
+}
+
+pub fn cmd_update(package: Option<String>) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let manifest = PackageManifest::from_file(&cwd.join("Block.toml"))?;
+    let client = RegistryClient::from_env_or_creds();
+    let lf = resolve(&manifest.dependencies, client.base_url(), &client)?;
+    lf.write_atomic(&cwd.join("Block.lock"))?;
+    if let Some(pkg) = package {
+        println!("Updated dependency graph (requested: {pkg})");
+    } else {
+        println!("Updated Block.lock ({} package(s))", lf.package.len());
+    }
+    cmd_install(true, false, false)
+}
+
+pub fn cmd_list(tree: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let lock_path = cwd.join("Block.lock");
+    if !lock_path.exists() {
+        println!("No Block.lock found (0 dependencies).");
+        return Ok(());
+    }
+    let lf = Lockfile::read(&lock_path)?;
+    for pkg in &lf.package {
+        println!("{} v{}", pkg.name, pkg.version);
+        if tree {
+            for (dep, req) in &pkg.dependencies {
+                println!("  └── {dep} ({req})");
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn cmd_verify(archive: &std::path::Path) -> Result<()> {
+    let res = block_package::verify_archive(archive)?;
+    let full_name = match res.scope {
+        Some(s) => format!("@{}/{}", s, res.name),
+        None => res.name,
+    };
+    println!(
+        "Verified {} v{} (entry: {}, {} bytes, sha256: {})",
+        full_name, res.version, res.entry, res.size_bytes, res.sha256
+    );
+    Ok(())
+}
+
+pub fn cmd_cache_list() -> Result<()> {
+    let cache_dir = std::env::current_dir()?
+        .join(".subsumptive")
+        .join("packages");
+    if !cache_dir.exists() {
+        println!("Local package cache is empty.");
+        return Ok(());
+    }
+    println!("Cache directory: {}", cache_dir.display());
+    for entry in fs::read_dir(&cache_dir)? {
+        let entry = entry?;
+        println!("  {}", entry.file_name().to_string_lossy());
+    }
+    Ok(())
+}
+
+pub fn cmd_cache_clean(dry_run: bool, yes: bool) -> Result<()> {
+    let cache_dir = std::env::current_dir()?
+        .join(".subsumptive")
+        .join("packages");
+    if !cache_dir.exists() {
+        println!("Local package cache is already empty.");
+        return Ok(());
+    }
+    if dry_run {
+        println!("Dry run: would remove {}", cache_dir.display());
+        return Ok(());
+    }
+    if !yes {
+        bail!("pass --yes to confirm removing {}", cache_dir.display());
+    }
+    fs::remove_dir_all(&cache_dir)?;
+    println!("Cleaned {}", cache_dir.display());
     Ok(())
 }

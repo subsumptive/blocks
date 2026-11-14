@@ -9,6 +9,7 @@ block-lexer = { path = "../block-lexer" }
 block-parser = { path = "../block-parser" }
 block-types = { path = "../block-types" }
 block-ir = { path = "../block-ir" }
+block-package = { path = "../block-package" }
 thiserror.workspace = true
 sha2.workspace = true
 hex.workspace = true
