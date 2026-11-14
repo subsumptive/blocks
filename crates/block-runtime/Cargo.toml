@@ -1,0 +1,16 @@
+[package]
+name = "block-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+block-parser = { path = "../block-parser" }
+block-types = { path = "../block-types" }
+block-ir = { path = "../block-ir" }
+thiserror.workspace = true
+serde.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+block-compiler = { path = "../block-compiler" }

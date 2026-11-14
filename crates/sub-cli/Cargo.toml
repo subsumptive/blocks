@@ -1,0 +1,27 @@
+[package]
+name = "sub-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sub"
+path = "src/main.rs"
+
+[dependencies]
+block-compiler = { path = "../block-compiler" }
+block-ir = { path = "../block-ir" }
+block-parser = { path = "../block-parser" }
+block-runtime = { path = "../block-runtime" }
+block-types = { path = "../block-types" }
+block-package = { path = "../block-package" }
+block-resolver = { path = "../block-resolver" }
+block-registry-core = { path = "../block-registry-core" }
+block-registry-client = { path = "../block-registry-client" }
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,10 @@
+block Greeting {
+    input name: Text
+    output message: Text
+
+    use formatter = Format("Hello, {}")
+
+    pipeline {
+        message = formatter(name)
+    }
+}

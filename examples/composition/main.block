@@ -1,0 +1,12 @@
+import Greeting from "./greeting.block"
+
+block Main {
+    input name: Text
+    output result: Text
+
+    use greeting = Greeting()
+
+    pipeline {
+        result = greeting(name)
+    }
+}

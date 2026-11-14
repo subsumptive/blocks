@@ -1,0 +1,12 @@
+block TextPipeline {
+    input text: Text
+    output token_count: Integer
+
+    use tokenizer = Tokenize()
+    use counter = CountTokens()
+
+    pipeline {
+        tokens = tokenizer(text)
+        token_count = counter(tokens)
+    }
+}

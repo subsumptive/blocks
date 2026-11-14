@@ -1,0 +1,14 @@
+[package]
+name = "block-compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+block-lexer = { path = "../block-lexer" }
+block-parser = { path = "../block-parser" }
+block-types = { path = "../block-types" }
+block-ir = { path = "../block-ir" }
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
